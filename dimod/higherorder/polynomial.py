@@ -286,11 +286,11 @@ class BinaryPolynomial(abc.MutableMapping):
         """
 
         new_labels = set(mapping.values())
-                         
-        if any(v in existing and v not in mapping for v in new_labels):
+        variables = self.variables
+        if any(v in variables and v not in mapping for v in new_labels):
             msg = ("A variable cannot be relabeled to an existing name without also "
                    "relabeling the existing variable")
-            raise ValueError(msg.format(v))
+            raise ValueError(msg)
         vartype = self.vartype
         newterms = {
             frozenset(mapping.get(v, v) for v in term): bias
@@ -380,9 +380,10 @@ class BinaryPolynomial(abc.MutableMapping):
         else:
             ignored_terms = {asfrozenset(term) for term in ignored_terms}
 
-        for term in self:
-            if term not in ignored_terms:
-                self[term] *= scalar
+        self._terms = {
+            term: bias if term in ignored_terms else bias * scalar
+            for term, bias in ignored_terms
+        )
 
     @classmethod
     def from_hising(cls, h, J, offset=None):
