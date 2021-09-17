@@ -111,11 +111,11 @@ class BinaryPolynomial(abc.MutableMapping):
             poly = poly.items()
 
         # we need to aggregate the repeated terms
-
-        self._terms = terms = defaultdict(int)
-        for term, bias in poly:
+        terms = defaultdict(int)
+        for term, bias in filter(tl.second, poly):
             terms[freeze_term(term, vartype)] += bias
-        
+
+        self._terms = tl.valfilter(bool, terms)
         self.vartype = vartype
 
     def __contains__(self, term):
@@ -165,6 +165,39 @@ class BinaryPolynomial(abc.MutableMapping):
     def __repr__(self):
         return '{!s}({!r}, {!r})'.format(self.__class__.__name__,
                                          self._terms, self.vartype.name)
+
+    def __add__(self, other):
+        if self.vartype != other.vartype:
+            raise ValueError
+        else:
+            return BinaryPolynomial(itertools.chain(self.items(), other.items()), self.vartype)
+
+    def __mul__(self, other):
+        if self.vartype != other.vartype:
+            raise ValueError
+        else:
+            return BinaryPolynomial(
+                (
+                    (itertools.chain(term1, term2), bias1*bias2)
+                    for term1, bias1 in self.items()
+                    for term2, bias2 in other.items()
+                ),
+                self.vartype
+            )
+
+    def __pow__(self, n):
+        if n > 1:
+            tmp = self ** (n//2)
+            tmp *= tmp
+            if n % 2:
+                tmp += self
+            return tmp
+        elif n == 1:
+            return self
+        elif n == 0:
+            return BinaryPolynomial({(): 1}, self.vartype)
+        else:
+            raise ValueError
 
     @property
     def variables(self):
@@ -251,19 +284,24 @@ class BinaryPolynomial(abc.MutableMapping):
             relabeled. If `inplace` is set to True, returns itself.
 
         """
-        if not inplace:
-            return self.copy().relabel_variables(mapping, inplace=True)
 
-        for submap in iter_safe_relabels(mapping, self.variables):
+        new_labels = set(mapping.values())
+        variables = self.variables
+        if any(v in variables and v not in mapping for v in new_labels):
+            msg = ("A variable cannot be relabeled to an existing name without also "
+                   "relabeling the existing variable")
+            raise ValueError(msg)
+        vartype = self.vartype
+        newterms = {
+            frozenset(mapping.get(v, v) for v in term): bias
+            for term, bias in self.items()
+        }
 
-            for oldterm, bias in list(self.items()):
-                newterm = frozenset((submap.get(v, v) for v in oldterm))
-
-                if newterm != oldterm:
-                    self[newterm] = bias
-                    del self[oldterm]
-
-        return self
+        if inplace:
+            self._terms=newterms
+            return self
+        else:
+            return BinaryPolynomial(newterms, vartype)
 
     def normalize(self, bias_range=1, poly_range=None, ignored_terms=None):
         """Normalizes the biases of the binary polynomial such that they fall in
@@ -342,9 +380,10 @@ class BinaryPolynomial(abc.MutableMapping):
         else:
             ignored_terms = {asfrozenset(term) for term in ignored_terms}
 
-        for term in self:
-            if term not in ignored_terms:
-                self[term] *= scalar
+        self._terms = {
+            term: bias if term in ignored_terms else bias * scalar
+            for term, bias in ignored_terms
+        )
 
     @classmethod
     def from_hising(cls, h, J, offset=None):
@@ -465,19 +504,14 @@ class BinaryPolynomial(abc.MutableMapping):
             else:
                 return self
 
-        new = BinaryPolynomial({}, Vartype.BINARY)
-
-        # s = 2x - 1
-        for term, bias in self.items():
-            for t in map(frozenset, powerset(term)):
-                newbias = bias * 2**len(t) * (-1)**(len(term) - len(t))
-
-                if t in new:
-                    new[t] += newbias
-                else:
-                    new[t] = newbias
-
-        return new
+        items = (
+            (t, newbias * ((-2)**len(t)))
+            for term, bias in self.items()
+            for newbias in (bias * ((-1)**len(term)),)
+            for t in powerset(term)
+        )
+            
+        return BinaryPolynomial(items, Vartype.BINARY)
 
     def to_spin(self, copy=False):
         """Return a binary polynomial over `{-1, +1}` variables.
@@ -497,19 +531,14 @@ class BinaryPolynomial(abc.MutableMapping):
             else:
                 return self
 
-        new = BinaryPolynomial({}, Vartype.SPIN)
-
-        # x = (s + 1) / 2
-        for term, bias in self.items():
-            newbias = bias / (2**len(term))
-
-            for t in map(frozenset, powerset(term)):
-                if t in new:
-                    new[t] += newbias
-                else:
-                    new[t] = newbias
-
-        return new
+        items = (
+            (t, newbias)
+            for term, bias in self.items()
+            for newbias in (bias / (2**len(term)),)
+            for t in powerset(term)
+        )
+            
+        return BinaryPolynomial(items, Vartype.SPIN)
 
 
 def powerset(iterable):
